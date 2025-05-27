@@ -1,0 +1,175 @@
+---
+title: "Cyclistic RMD file"
+author: "Saud"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r}
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+```
+
+# Load required packages (ensure these are installed beforehand)
+```{r}
+library(tidyverse)
+library(skimr)
+library(janitor)
+library(here)
+library(scales)
+library(conflicted)
+```
+
+# Resolve conflicts between packages
+```{r}
+conflict_prefer("filter", "dplyr")
+conflict_prefer("lag", "dplyr")
+```
+
+# Download CSV files here [Trips Data](https://divvy-tripdata.s3.amazonaws.com/index.html)
+
+# Load data
+# Ensure the CSV files are downloaded into your RStudio working directory
+```{r}
+q1_2019 <- read_csv("Trips_2019_Q1.csv")
+q1_2020 <- read_csv("Trips_2020_Q1.csv")
+```
+
+# Quick look at the datasets (avoid View to prevent GUI-related issues)
+```{r}
+# Display the first few rows of each dataset
+head(q1_2019)
+head(q1_2020)
+```
+
+# Rename columns of q1_2019 to ensure consistency
+```{r}
+(q1_2019 <-rename(q1_2019
+                 ,ride_id=trip_id
+                 ,rideable_type=bikeid
+                 ,started_at=start_time
+                 ,ended_at=end_time
+                 ,start_station_name=from_station_name
+                 ,start_station_id=from_station_id
+                 ,end_station_name=to_station_name
+                 ,end_station_id=to_station_id
+                 ,member_casual=usertype
+                 ))
+```
+
+# Observe structure of both data sets
+```{r}
+str(q1_2019)
+str(q1_2020)
+```
+
+# Convert **ride_id** and **rideable_type** columns in ***q1_2019*** to text(character) format
+```{r}
+q1_2019 <- mutate(q1_2019, ride_id = as.character(ride_id), rideable_type = as.character(rideable_type))
+```
+
+# Combine both datasets into new data frame ***all_trips***
+```{r}
+all_trips <- bind_rows(q1_2019, q1_2020)
+```
+
+# Inspect new dataframe
+```{r}
+head(all_trips)
+names(all_trips) <- make.names(names(all_trips))
+```
+
+# Remove unwanted columns to ensure consistency
+```{r}
+all_trips <- all_trips %>% 
+  select(-c(start_lat,start_lng,end_lat,end_lng,gender,birthyear,tripduration))
+```
+
+# Inspect the column **member_casual**
+```{r}
+table(all_trips$member_casual)
+```
+
+# In **member_casual** column, replace *Subscriber* and *Customer* with member and casual respectively
+```{r}
+all_trips <-all_trips %>% 
+  mutate(member_casual = recode(member_casual
+                                ,"Subscriber"="member"
+                                ,"Customer"="casual"))
+```
+
+# Add new columns
+```{r}
+all_trips$date <- as.Date(all_trips$started_at)
+all_trips$month <- format(as.Date(all_trips$date),"%m")
+all_trips$year <- format(as.Date(all_trips$date), "%Y")
+all_trips$day <- format(as.Date(all_trips$date), "%d")
+all_trips$day_of_week <- format(as.Date(all_trips$date), "%A")
+```
+
+# Add another column named **ride_length**
+```{r}
+all_trips <- all_trips %>% 
+  mutate(ride_length= difftime(ended_at, started_at, units = "secs"))
+```
+
+# convert **ride_length** from factor to numeric to perform calculations
+```{r}
+all_trips$ride_length <- as.numeric(as.character(all_trips$ride_length))
+```
+
+# Now delete some rows where bikes were taken out for quality control and ride length was negative.
+# create new dataframe ***all_trips_v2***
+```{r}
+all_trips_v2 <- all_trips[!(all_trips$start_station_name == "HQ QR" | all_trips$ride_length <0),]
+```
+
+# Analyze ridership data by type and weekday
+# create another dataframe ***customer***
+```{r}
+customer <- all_trips_v2 %>% 
+       group_by (day_of_week, member_casual) %>%
+       summarise(avg_ride_length = mean(ride_length),
+                 max_ride_length = max(ride_length), 
+                 min_ride_length = min(ride_length), 
+                 med_ride_length = median(ride_length), 
+                 num_rides = n())
+```
+
+# Rename column day_of_week
+```{r}
+customer<- rename(customer,
+                  weekdays = day_of_week)
+```
+
+# Visualize data to compare **average ride length**
+```{r}
+ggplot(data = customer) +
+  geom_col(aes(x=weekdays, y=avg_ride_length, fill=member_casual), position = "dodge") +
+  labs(title = "Average Ride Length", subtitle = "Member vs Casual")
+```
+
+# Now visualize data to compare **number of rides**
+```{r}
+ggplot(data = customer) +
+  geom_col(aes(x=weekdays, y=num_rides, fill=member_casual), position = "dodge") +
+  labs(title = "Number of Rides", subtitle = "Member vs Casual") +
+  scale_y_continuous(labels = comma)
+```
+
+# Create a dataframe **stations** for top stations with most number of rides by casual users
+```{r}
+stations <- all_trips_v2 %>% 
+  drop_na() %>% 
+  group_by(start_station_name, end_station_name, member_casual) %>% 
+  summarise(total_rides = n(), .groups = 'drop') %>% 
+  arrange(member_casual, -total_rides) %>% 
+  slice_head(n=5)
+```
+
+# Now visualize this data by column chart
+```{r}
+ggplot(data=(stations)) + geom_col(aes(x=start_station_name, y=total_rides, fill = start_station_name)) +
+  labs(title = "Most Popular Start Stations for Bike Rides", subtitle = "Top 3 Start Stations by Total Number of Rides Across Casual Users")
+
+```
+
